@@ -10,3 +10,11 @@ def add(a:int,b:int)->int:
     return a+b
 
 app=mcp.http_app()
+
+
+ "todos": {
+      "command": "npx",
+      "args": [
+        "mcp-remote","https://mcp-auth0-oidc.ak-todos-api.workers.dev/mcp"
+      ]
+    },
