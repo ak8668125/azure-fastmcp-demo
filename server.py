@@ -51,17 +51,17 @@ async def oauth_register_client(request):
         "token_endpoint_auth_method": "client_secret_post"
     }, status_code=201)
 
-mcp_app = mcp.http_app()
+    mcp_app = mcp.http_app(path="/")  # serve at root of the mount
 
-app = Starlette(
-    lifespan=mcp_app.lifespan,
-    routes=[
-        Route("/.well-known/oauth-protected-resource", oauth_protected_resource),
-        Route("/.well-known/oauth-authorization-server", oauth_authorization_server),
-        Route("/register", oauth_register_client, methods=["POST"]),
-        Mount("/", app=mcp_app),
-    ]
-)
+    app = Starlette(
+        lifespan=mcp_app.lifespan,
+        routes=[
+            Route("/.well-known/oauth-protected-resource", oauth_protected_resource),
+            Route("/.well-known/oauth-authorization-server", oauth_authorization_server),
+            Route("/register", oauth_register_client, methods=["POST"]),
+            Mount("/mcp", app=mcp_app),  # ← now /mcp hits mcp_app's root
+        ]
+    )
 
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    if __name__ == "__main__":
+        uvicorn.run(app, host="0.0.0.0", port=8000)
