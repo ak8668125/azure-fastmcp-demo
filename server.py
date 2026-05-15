@@ -1,8 +1,10 @@
 import os
 from fastmcp import FastMCP
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route, Mount
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 from dotenv import load_dotenv
 import uvicorn
 
@@ -23,15 +25,12 @@ def add(a: int, b: int) -> int:
 async def oauth_protected_resource(request):
     return JSONResponse({
         "resource": SERVER_URL,
-        "authorization_servers": [
-            f"https://login.microsoftonline.com/{TENANT_ID}/v2.0"
-        ]
+        "authorization_servers": [SERVER_URL]
     })
 
 async def oauth_authorization_server(request):
-    base = f"https://login.microsoftonline.com/{TENANT_ID}/v2.0"
     return JSONResponse({
-        "issuer": base,
+        "issuer": SERVER_URL,
         "authorization_endpoint": f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/authorize",
         "token_endpoint": f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token",
         "registration_endpoint": f"{SERVER_URL}/register",
@@ -41,27 +40,54 @@ async def oauth_authorization_server(request):
     })
 
 async def oauth_register_client(request):
-    """Fake dynamic client registration - returns our pre-registered app credentials"""
     return JSONResponse({
         "client_id": CLIENT_ID,
         "client_secret": CLIENT_SECRET,
-        "redirect_uris": ["http://localhost:6978/callback"],
+        "redirect_uris": [
+            "http://localhost:6978/callback",
+            "http://localhost:12570/callback",
+            "http://localhost:8080/callback",
+        ],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
         "token_endpoint_auth_method": "client_secret_post"
     }, status_code=201)
 
-    mcp_app = mcp.http_app(path="/")  # serve at root of the mount
+class OAuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path in [
+            "/.well-known/oauth-protected-resource",
+            "/.well-known/oauth-protected-resource/mcp",
+            "/.well-known/oauth-authorization-server",
+            "/register"
+        ]:
+            return await call_next(request)
 
-    app = Starlette(
-        lifespan=mcp_app.lifespan,
-        routes=[
-            Route("/.well-known/oauth-protected-resource", oauth_protected_resource),
-            Route("/.well-known/oauth-authorization-server", oauth_authorization_server),
-            Route("/register", oauth_register_client, methods=["POST"]),
-            Mount("/mcp", app=mcp_app),  # ← now /mcp hits mcp_app's root
-        ]
-    )
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return Response(
+                status_code=401,
+                headers={
+                    "WWW-Authenticate": f'Bearer realm="{SERVER_URL}"'
+                }
+            )
 
-    if __name__ == "__main__":
-        uvicorn.run(app, host="0.0.0.0", port=8000)
+        return await call_next(request)
+
+mcp_app = mcp.http_app(path="/")
+
+app = Starlette(
+    lifespan=mcp_app.lifespan,
+    routes=[
+        Route("/.well-known/oauth-protected-resource", oauth_protected_resource),
+        Route("/.well-known/oauth-protected-resource/mcp", oauth_protected_resource),
+        Route("/.well-known/oauth-authorization-server", oauth_authorization_server),
+        Route("/register", oauth_register_client, methods=["POST"]),
+        Mount("/mcp", app=mcp_app),
+    ]
+)
+
+app.add_middleware(OAuthMiddleware)
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
